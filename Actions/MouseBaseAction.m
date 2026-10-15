@@ -133,8 +133,10 @@
         [self postHumanizedMouseEventsWithEasingFactor:options.easing
                                                    toX:(float)p.x
                                                    toY:(float)p.y];
+        CGWarpMouseCursorPosition(p);
     } else {
         // Move
+        CGWarpMouseCursorPosition(p);
         CGEventRef move = CGEventCreateMouseEvent(NULL, [self getMoveEventConstant], p, kCGMouseButtonLeft); // kCGMouseButtonLeft is ignored
         CGEventPost(kCGHIDEventTap, move);
         CFRelease(move);

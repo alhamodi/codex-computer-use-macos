@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "computer-use-macos": {
+      "command": "python3",
+      "args": ["-m", "computer_use.mcp_server"],
+      "env": {
+        "PYTHONPATH": "/Users/abdulrahmansalimalhamodi/Desktop/click",
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}

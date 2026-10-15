@@ -1,0 +1,12 @@
+{
+  "name": "computer-use-macos",
+  "version": "1.0.0",
+  "description": "macOS desktop control for Codex through a local MCP server: screenshots, Apple Vision OCR, mouse, keyboard, Safari/Chrome, active windows, and UI automation.",
+  "author": {
+    "name": "alhamodi / ezpzai / Carsten Blüm"
+  },
+  "homepage": "https://github.com/BlueM/cliclick",
+  "repository": "https://github.com/BlueM/cliclick",
+  "skills": "./skills/computer-use-macos",
+  "mcp": "./.mcp.json"
+}
