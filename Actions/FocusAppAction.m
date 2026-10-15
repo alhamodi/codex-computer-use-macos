@@ -36,14 +36,14 @@
     if (pid > 0) {
         NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
         if (app) {
-            activated = [app activateWithOptions:NSApplicationActivateAllWindows];
+            activated = [app activateWithOptions:(NSApplicationActivateIgnoringOtherApps | NSApplicationActivateAllWindows)];
         }
     }
 
     if (!activated) {
         for (NSRunningApplication *app in [[NSWorkspace sharedWorkspace] runningApplications]) {
             if ([[app localizedName] caseInsensitiveCompare:data] == NSOrderedSame) {
-                activated = [app activateWithOptions:NSApplicationActivateAllWindows];
+                activated = [app activateWithOptions:(NSApplicationActivateIgnoringOtherApps | NSApplicationActivateAllWindows)];
                 break;
             }
         }
