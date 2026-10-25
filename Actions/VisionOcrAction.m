@@ -44,7 +44,9 @@
         [NSException raise:@"OCRException" format:@"Failed to capture screen for OCR"];
     }
 
-    BOOL cropActiveWindow = [data isEqualToString:@"active_window"] || [data isEqualToString:@"window"];
+    BOOL cropActiveWindow = [data rangeOfString:@"active_window"].location != NSNotFound ||
+                            [data rangeOfString:@"window"].location != NSNotFound;
+    BOOL fastLevel = [data rangeOfString:@"fast"].location != NSNotFound;
     double offsetX = 0.0;
     double offsetY = 0.0;
 
@@ -122,7 +124,12 @@
             [lines addObject:lineDict];
         }
     }];
-    [request setRecognitionLevel:VNRequestTextRecognitionLevelAccurate];
+    if (fastLevel) {
+        [request setRecognitionLevel:VNRequestTextRecognitionLevelFast];
+    } else {
+        [request setRecognitionLevel:VNRequestTextRecognitionLevelAccurate];
+        [request setUsesLanguageCorrection:NO];
+    }
 
     VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:image options:@{}];
     CGImageRelease(image);

@@ -56,12 +56,25 @@ macOS requires two privacy permissions:
 - `safari_search(query)` / `chrome_search(query)`: Search Google in the browser.
 - `safari_read_page` / `chrome_read_page`: Read inner text of active web page.
 
-### 6. UI Automation
+### 6. UI Automation & Visual Grounding
 - `find_and_click_element(text, active_window_only=False)`: Search for an on-screen button or label using Apple Vision OCR and click its exact center automatically.
+- `som_observe(active_window_only=False, save_path=None)`: Capture screenshot and overlay Set-of-Marks (numbered badges on detected UI elements) for reliable grounding by vision models without pixel hallucination.
+- `click_mark(mark_id, marks)`: Click a numbered UI element mark identified from `som_observe`.
 
-### 7. Utility
+### 7. DaVinci Resolve 21 Automation
+- `davinci_status`: Get operational status (is running, active project name, window bounds, project manager state).
+- `davinci_switch_page(page)`: Switch instantly to any workspace page: `media`, `cut`, `edit`, `fusion`, `color`, `fairlight`, `deliver`.
+- `davinci_project_manager(action)`: Control Project Manager: `open`, `close`, or `list` projects with coordinates.
+- `davinci_open_project(project_name)`: Open project by name smoothly with double-click and state verification.
+- `davinci_timeline_action(action)`: Run timeline controls: `play_pause`, `fit_timeline`, `split_clip`, `zoom_in`, `zoom_out`, `toggle_snapping`, `save_project`, `import_media`.
+
+### 8. Safety & Humanized Cursor Motion
+- **Visible Smooth Cursor**: All mouse movements use humanized `cubicEaseInOut` curves across ~120Hz frames so the user sees exactly where the cursor is going.
+- **User Takeover Fail-safe**: If the user moves the physical mouse during automation (drift > 35pt), the engine halts immediately with `UserTakeoverError` / `user_takeover`, protecting user control.
+
+### 9. Utility
 - `computer`: Standard multimodal Computer Use tool matching Anthropic/OpenAI schema.
-- `batch_actions(actions)`: Execute a batch of actions sequentially.
+- `batch_actions(actions)`: Execute a batch of actions sequentially without re-spawning processes.
 - `wait(ms)`: Pause for specified milliseconds.
 
 ---

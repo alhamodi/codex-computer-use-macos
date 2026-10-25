@@ -30,10 +30,21 @@
                            [[self class] commandShortcut], [[self class] commandShortcut]];
     }
 
-    int pid = [data intValue];
+    if (MODE_REGULAR != options.mode) {
+        [options.verbosityOutputHandler write:[NSString stringWithFormat:@"Activate application: %@", data]];
+    }
+
+    if (MODE_TEST == options.mode) {
+        return;
+    }
+
+    // Check if data is purely a numeric PID
+    NSScanner *scanner = [NSScanner scannerWithString:data];
+    int pid = 0;
+    BOOL isPurePid = [scanner scanInt:&pid] && [scanner isAtEnd] && pid > 0;
     BOOL activated = NO;
 
-    if (pid > 0) {
+    if (isPurePid) {
         NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
         if (app) {
             activated = [app activateWithOptions:(NSApplicationActivateIgnoringOtherApps | NSApplicationActivateAllWindows)];
@@ -49,7 +60,7 @@
         }
     }
 
-    if (MODE_REGULAR != options.mode) {
+    if (MODE_VERBOSE == options.mode) {
         [options.verbosityOutputHandler write:[NSString stringWithFormat:@"Activate %@: %@", data, activated ? @"YES" : @"NO"]];
     }
 }

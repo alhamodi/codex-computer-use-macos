@@ -17,6 +17,14 @@ from computer_use.schema import OPENAI_COMPUTER_TOOL
 class MCPServer:
     def __init__(self):
         self.computer = Computer()
+        self._davinci = None
+
+    @property
+    def davinci(self):
+        if self._davinci is None:
+            from computer_use.profiles.davinci import DaVinciResolveProfile
+            self._davinci = DaVinciResolveProfile(self.computer)
+        return self._davinci
 
     def list_tools(self) -> List[Dict[str, Any]]:
         return [
@@ -381,6 +389,107 @@ class MCPServer:
                     },
                     "required": ["ms"]
                 }
+            },
+            # DaVinci Resolve 21 Category
+            {
+                "name": "davinci_status",
+                "description": "Get operational status of DaVinci Resolve (running state, active project name, window bounds, project manager visibility).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "davinci_switch_page",
+                "description": "Switch to a DaVinci Resolve workspace page (media, cut, edit, fusion, color, fairlight, deliver) using native macOS menu automation.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "page": {
+                            "type": "string",
+                            "enum": ["media", "cut", "edit", "fusion", "color", "fairlight", "deliver"],
+                            "description": "The workspace page to switch to"
+                        }
+                    },
+                    "required": ["page"]
+                }
+            },
+            {
+                "name": "davinci_project_manager",
+                "description": "Control DaVinci Resolve Project Manager (open, close, or list visible projects).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["open", "close", "list"],
+                            "description": "Action to perform on Project Manager"
+                        }
+                    },
+                    "required": ["action"]
+                }
+            },
+            {
+                "name": "davinci_open_project",
+                "description": "Open a specific project by name from the DaVinci Resolve Project Manager.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "project_name": {
+                            "type": "string",
+                            "description": "Name of the project to open"
+                        }
+                    },
+                    "required": ["project_name"]
+                }
+            },
+            {
+                "name": "davinci_timeline_action",
+                "description": "Execute timeline actions in DaVinci Resolve: play_pause, fit_timeline, split_clip, zoom_in, zoom_out, toggle_snapping, save_project, import_media.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": [
+                                "play_pause",
+                                "fit_timeline",
+                                "split_clip",
+                                "zoom_in",
+                                "zoom_out",
+                                "toggle_snapping",
+                                "save_project",
+                                "import_media"
+                            ],
+                            "description": "The timeline action to perform"
+                        }
+                    },
+                    "required": ["action"]
+                }
+            },
+            # Visual Grounding / Set-of-Marks (SoM)
+            {
+                "name": "som_observe",
+                "description": "Capture screen and overlay Set-of-Marks (numbered badges on detected UI elements) for reliable grounding by vision models.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "active_window_only": {"type": "boolean", "description": "Only capture frontmost window", "default": False},
+                        "save_path": {"type": "string", "description": "Optional file path to save annotated PNG"}
+                    }
+                }
+            },
+            {
+                "name": "click_mark",
+                "description": "Click a numbered UI element mark identified from som_observe.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "mark_id": {"type": "integer", "description": "Numeric badge ID of mark to click"},
+                        "marks": {"type": "object", "description": "Marks registry dictionary returned from som_observe"}
+                    },
+                    "required": ["mark_id", "marks"]
+                }
             }
         ]
 
@@ -577,6 +686,70 @@ class MCPServer:
         elif name == "wait":
             res = self.computer.wait(args["ms"])
             return [{"type": "text", "text": json.dumps(res, indent=2)}]
+
+        # DaVinci Resolve Category
+        elif name == "davinci_status":
+            res = self.davinci.get_status()
+            return [{"type": "text", "text": json.dumps(res, indent=2)}]
+
+        elif name == "davinci_switch_page":
+            ok = self.davinci.switch_to_page(args["page"])
+            return [{"type": "text", "text": json.dumps({"page": args["page"], "success": ok}, indent=2)}]
+
+        elif name == "davinci_project_manager":
+            action = args["action"]
+            if action == "open":
+                ok = self.davinci.open_project_manager()
+                return [{"type": "text", "text": json.dumps({"action": "open", "success": ok}, indent=2)}]
+            elif action == "close":
+                ok = self.davinci.close_project_manager()
+                return [{"type": "text", "text": json.dumps({"action": "close", "success": ok}, indent=2)}]
+            elif action == "list":
+                projects = self.davinci.list_projects_in_manager()
+                return [{"type": "text", "text": json.dumps({"projects": projects, "count": len(projects)}, indent=2)}]
+            else:
+                raise ValueError(f"Unknown project manager action: {action}")
+
+        elif name == "davinci_open_project":
+            ok = self.davinci.open_project(args["project_name"])
+            return [{"type": "text", "text": json.dumps({"project_name": args["project_name"], "success": ok}, indent=2)}]
+
+        elif name == "davinci_timeline_action":
+            action = args["action"]
+            method_map = {
+                "play_pause": self.davinci.play_pause,
+                "fit_timeline": self.davinci.fit_timeline,
+                "split_clip": self.davinci.split_clip,
+                "zoom_in": self.davinci.zoom_in_timeline,
+                "zoom_out": self.davinci.zoom_out_timeline,
+                "toggle_snapping": self.davinci.toggle_snapping,
+                "save_project": self.davinci.save_project,
+                "import_media": self.davinci.import_media,
+            }
+            if action in method_map:
+                ok = method_map[action]()
+                return [{"type": "text", "text": json.dumps({"action": action, "success": ok}, indent=2)}]
+            else:
+                raise ValueError(f"Unknown timeline action: {action}")
+
+        # Set-of-Marks (SoM) Category
+        elif name == "som_observe":
+            res = self.computer.som_observe(
+                active_window_only=args.get("active_window_only", False),
+                save_path=args.get("save_path")
+            )
+            return [
+                {"type": "image", "data": res["base64"], "mimeType": "image/png"},
+                {"type": "text", "text": json.dumps({
+                    "count": res["count"],
+                    "marks": res["marks"],
+                    "path": res.get("image_path")
+                }, indent=2)}
+            ]
+
+        elif name == "click_mark":
+            ok = self.computer.click_mark(args["mark_id"], args["marks"])
+            return [{"type": "text", "text": json.dumps({"clicked": ok})}]
 
         else:
             raise ValueError(f"Unknown tool: {name}")

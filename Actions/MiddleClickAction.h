@@ -6,8 +6,14 @@
  */
 
 #import <Cocoa/Cocoa.h>
+#import "ActionProtocol.h"
 #import "MouseBaseAction.h"
 
-@interface MiddleClickAction : MouseBaseAction
+@interface MiddleClickAction : MouseBaseAction <ActionProtocol>
+
++ (NSString *)commandShortcut;
++ (NSString *)commandDescription;
+- (NSString *)actionDescriptionString:(NSString *)locationDescription;
+- (void)performActionAtPoint:(CGPoint)p;
 
 @end

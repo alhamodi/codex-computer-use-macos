@@ -39,21 +39,36 @@
 
     struct timespec waitingtime;
     waitingtime.tv_sec = 0;
-
-    if (options.waitTime < 100) {
-        options.waitTime = 100;
-    }
+    waitingtime.tv_nsec = 0;
 
     if (options.waitTime > 999) {
         waitingtime.tv_sec = (int)floor(options.waitTime / 1000);
         waitingtime.tv_nsec = (options.waitTime - waitingtime.tv_sec * 1000) * 1000000;
-    } else {
+    } else if (options.waitTime > 0) {
         waitingtime.tv_sec = 0;
         waitingtime.tv_nsec = options.waitTime * 1000000;
     }
 
+    CGPoint lastExpectedPos = CGPointZero;
+    BOOL hasExpectedPos = NO;
+
     NSUInteger i, count = [actions count];
     for (i = 0; i < count; i++) {
+        // Fail-safe check: detect user takeover (physical mouse movement)
+        if (options.failsafe && hasExpectedPos) {
+            CGEventRef curEvent = CGEventCreate(NULL);
+            if (curEvent) {
+                CGPoint curPos = CGEventGetLocation(curEvent);
+                CFRelease(curEvent);
+                double dx = curPos.x - lastExpectedPos.x;
+                double dy = curPos.y - lastExpectedPos.y;
+                if ((dx * dx + dy * dy) > (35.0 * 35.0)) {
+                    [NSException raise:@"UserInterruptedException"
+                                format:@"User takeover detected: mouse cursor was moved physically (dx: %.0f, dy: %.0f). Automation paused for safety.", dx, dy];
+                }
+            }
+        }
+
         NSArray *action = [[actions objectAtIndex:i] componentsSeparatedByString:@":"];
         Class actionClass = [shortcuts objectForKey:[action objectAtIndex:0]];
         if (nil == actionClass) {
@@ -86,11 +101,20 @@
 
         [actionClassInstance release];
 
+        if (options.failsafe) {
+            CGEventRef postEvent = CGEventCreate(NULL);
+            if (postEvent) {
+                lastExpectedPos = CGEventGetLocation(postEvent);
+                hasExpectedPos = YES;
+                CFRelease(postEvent);
+            }
+        }
+
         if (options.isLastAction) {
             waitingtime.tv_sec = 0;
             waitingtime.tv_nsec = 1000000;
             nanosleep(&waitingtime, NULL);
-        } else {
+        } else if (options.waitTime > 0) {
             nanosleep(&waitingtime, NULL);
         }
     }

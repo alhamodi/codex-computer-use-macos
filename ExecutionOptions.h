@@ -37,6 +37,8 @@ struct ExecutionOptions {
     unsigned waitTime;
     BOOL isFirstAction;
     BOOL isLastAction;
+    BOOL failsafe;          // Abort when the user physically moves the mouse
+    unsigned moveDuration;  // Visible, time-based cursor motion in ms (0 = instant)
     OutputHandler *verbosityOutputHandler;
     OutputHandler *commandOutputHandler;
 };

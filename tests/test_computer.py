@@ -138,7 +138,10 @@ class TestComputerUse(unittest.TestCase):
             "chrome_search", "chrome_read_page", "safari_get_url", "safari_get_tab_title",
             "safari_navigate", "safari_search", "safari_read_page",
             "send_text_to_window", "send_keys_to_window", "find_and_click_element",
-            "batch_actions", "wait"
+            "batch_actions", "wait",
+            "davinci_status", "davinci_switch_page", "davinci_project_manager",
+            "davinci_open_project", "davinci_timeline_action",
+            "som_observe", "click_mark"
         ]
         
         for expected in expected_tools:
@@ -159,6 +162,42 @@ class TestComputerUse(unittest.TestCase):
         # Test list windows
         res_win = server.call_tool("list_windows", {})
         self.assertEqual(len(res_win), 1)
+
+    def test_user_takeover_and_easing_options(self):
+        from computer_use.computer import UserTakeoverError
+        c = Computer(smooth_cursor=True, move_duration=50, failsafe=True)
+        self.assertTrue(c.smooth_cursor)
+        self.assertEqual(c.move_duration, 50)
+        self.assertTrue(c.failsafe)
+        # Test cursor_position passes through execute_json with failsafe
+        res = c.execute_json({"action": "cursor_position"})
+        self.assertEqual(res.get("status"), "success")
+
+    def test_som_creation(self):
+        from PIL import Image
+        from computer_use.som import create_som_overlay
+        mock_img = Image.new("RGB", (800, 600), color=(50, 50, 50))
+        mock_ocr = {
+            "text": "File Edit Window",
+            "lines": [
+                {"text": "File", "box": {"x": 10, "y": 10, "width": 40, "height": 20, "center_x": 30, "center_y": 20}},
+                {"text": "Edit", "box": {"x": 60, "y": 10, "width": 40, "height": 20, "center_x": 80, "center_y": 20}},
+            ]
+        }
+        overlay_img, marks = create_som_overlay(mock_img, mock_ocr, scale_factor=1.0)
+        self.assertEqual(len(marks), 2)
+        self.assertEqual(marks[1]["text"], "File")
+        self.assertEqual(marks[2]["text"], "Edit")
+        self.assertEqual(overlay_img.size, (800, 600))
+
+    def test_davinci_profile_methods(self):
+        from computer_use.profiles.davinci import DaVinciResolveProfile
+        profile = DaVinciResolveProfile(self.computer)
+        status = profile.get_status()
+        self.assertIn("running", status)
+        self.assertIsInstance(profile.PAGES, dict)
+        self.assertIn("edit", profile.PAGES)
+        self.assertIn("deliver", profile.PAGES)
 
 
 if __name__ == "__main__":

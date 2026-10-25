@@ -38,10 +38,24 @@ def _clean_osascript_output(output: str) -> str:
     return "\n".join(lines).strip()
 
 
+class UserTakeoverError(RuntimeError):
+    """Raised when the user physically touches or moves the mouse during Computer Use automation."""
+    def __init__(self, message: str = "User takeover detected: mouse cursor was moved physically.", remaining_actions: Optional[List[Dict[str, Any]]] = None):
+        super().__init__(message)
+        self.remaining_actions = remaining_actions or []
+
+
 class Computer:
     """Core controller for macOS desktop automation and AI agent computer use."""
 
-    def __init__(self, binary_path: Optional[str] = None):
+    def __init__(
+        self,
+        binary_path: Optional[str] = None,
+        smooth_cursor: bool = True,
+        move_duration: int = 120,
+        failsafe: bool = True,
+        on_user_takeover: str = "raise"
+    ):
         if binary_path and os.path.exists(binary_path):
             self.binary_path = os.path.abspath(binary_path)
         else:
@@ -58,11 +72,39 @@ class Computer:
                         "cliclick binary not found. Please run 'make' in the project directory."
                     )
         
+        self.smooth_cursor = smooth_cursor
+        self.move_duration = move_duration
+        self.failsafe = failsafe
+        self.on_user_takeover = on_user_takeover
         self._cached_screen_info: Optional[Dict[str, Any]] = None
 
     def execute_json(self, payload: Union[Dict[str, Any], List[Dict[str, Any]]], timeout: int = 30) -> Dict[str, Any]:
         """Execute one or more Computer Use actions via JSON mode."""
-        json_str = json.dumps(payload)
+        if isinstance(payload, list):
+            body = {
+                "actions": payload,
+                "failsafe": self.failsafe,
+                "move_duration": self.move_duration if self.smooth_cursor else 0,
+            }
+        elif isinstance(payload, dict) and "actions" in payload:
+            body = dict(payload)
+            if "failsafe" not in body:
+                body["failsafe"] = self.failsafe
+            if "move_duration" not in body and self.smooth_cursor:
+                body["move_duration"] = self.move_duration
+        elif isinstance(payload, dict):
+            body = {
+                "actions": [payload],
+                "failsafe": self.failsafe,
+                "move_duration": self.move_duration if self.smooth_cursor else 0,
+            }
+            for k in ("easing", "wait_ms"):
+                if k in payload:
+                    body[k] = payload[k]
+        else:
+            body = payload
+
+        json_str = json.dumps(body)
         try:
             proc = subprocess.run(
                 [self.binary_path, "-j", "-"],
@@ -77,12 +119,26 @@ class Computer:
 
         if proc.returncode != 0:
             error_msg = proc.stderr.strip() or proc.stdout.strip() or f"Process exited with code {proc.returncode}"
+            err_dict: Dict[str, Any] = {}
             try:
                 err_dict = json.loads(proc.stdout)
                 if "error" in err_dict:
                     error_msg = err_dict["error"]
             except Exception:
                 pass
+
+            if err_dict.get("status") == "interrupted" or err_dict.get("reason") == "user_takeover":
+                if self.on_user_takeover == "prompt":
+                    print("\n⚠️ [Computer Use Failsafe] User takeover detected: Mouse was moved physically.")
+                    print("Options: [1] Continue execution | [2] Abort automation")
+                    try:
+                        choice = input("Enter choice [1/2] (default 2): ").strip()
+                    except (EOFError, KeyboardInterrupt):
+                        choice = "2"
+                    if choice == "1":
+                        return {"status": "resumed_by_user", "message": "User chose to continue"}
+                raise UserTakeoverError(error_msg)
+
             raise RuntimeError(f"Computer execution error: {error_msg}")
 
         try:
@@ -214,13 +270,14 @@ class Computer:
             "cursor": [cur_x, cur_y]
         }
 
-    def extract_text(self, active_window_only: bool = False) -> Dict[str, Any]:
+    def extract_text(self, active_window_only: bool = False, fast: bool = True, timeout: int = 60) -> Dict[str, Any]:
         """
         Extract text and bounding boxes using Apple's native Vision framework OCR.
+        Uses fast mode by default for sub-second recognition, or fast=False for deep model.
         Returns full text and structured lines with coordinates for clicking.
         """
         act = "extract_text_active_window" if active_window_only else "extract_text"
-        res = self.execute_json({"action": act})
+        res = self.execute_json({"action": act, "fast": fast}, timeout=timeout)
         return res.get("data", {})
 
     # --- Mouse and Keyboard Category ---
@@ -293,9 +350,18 @@ class Computer:
         return self.execute_json({"action": "type", "text": text})
 
     def type_unicode(self, text: str) -> Dict[str, Any]:
-        """Paste unicode text via clipboard to guarantee exact emoji/special character preservation."""
-        self.set_clipboard(text)
-        return self.hotkey("cmd", "v")
+        """Paste unicode text via clipboard, preserving user's existing clipboard contents."""
+        old_clip = self.get_clipboard()
+        try:
+            self.set_clipboard(text)
+            res = self.hotkey("cmd", "v")
+            return res
+        finally:
+            if old_clip:
+                try:
+                    self.set_clipboard(old_clip)
+                except Exception:
+                    pass
 
     def key(self, key_name: str) -> Dict[str, Any]:
         """Press special key (e.g. return, tab, esc, space, arrow-down)."""
@@ -332,23 +398,31 @@ class Computer:
         except Exception:
             return False
 
-    def open_app(self, app_name: str) -> bool:
+    def open_app(self, app_name: str, timeout: int = 15) -> bool:
         """Launch or activate application by name."""
-        # Try native activation first
         if self.focus_window(app_name=app_name):
             return True
-        # Fallback to open -a
-        res = subprocess.run(["open", "-a", app_name], capture_output=True, check=False)
-        return res.returncode == 0
+        try:
+            res = subprocess.run(["open", "-a", app_name], capture_output=True, check=False, timeout=timeout)
+            return res.returncode == 0
+        except subprocess.TimeoutExpired:
+            return False
 
-    def run_program(self, command: str) -> Dict[str, Any]:
-        """Run terminal command."""
-        proc = subprocess.run(command, shell=True, capture_output=True, text=True, check=False)
-        return {
-            "exit_code": proc.returncode,
-            "stdout": proc.stdout.strip(),
-            "stderr": proc.stderr.strip()
-        }
+    def run_program(self, command: str, timeout: int = 30) -> Dict[str, Any]:
+        """Run terminal command with timeout."""
+        try:
+            proc = subprocess.run(command, shell=True, capture_output=True, text=True, check=False, timeout=timeout)
+            return {
+                "exit_code": proc.returncode,
+                "stdout": proc.stdout.strip(),
+                "stderr": proc.stderr.strip()
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": f"Command timed out after {timeout} seconds"
+            }
 
     def get_window_text(self) -> str:
         """Extract text from active frontmost window via OCR."""
@@ -357,38 +431,50 @@ class Computer:
 
     # --- Clipboard Category ---
 
-    def get_clipboard(self) -> str:
+    def get_clipboard(self, timeout: int = 5) -> str:
         """Read macOS clipboard contents."""
-        proc = subprocess.run(["pbpaste"], capture_output=True, text=True, check=False)
-        return proc.stdout
+        try:
+            proc = subprocess.run(["pbpaste"], capture_output=True, text=True, check=False, timeout=timeout)
+            return proc.stdout
+        except (subprocess.TimeoutExpired, Exception):
+            return ""
 
-    def set_clipboard(self, text: str) -> None:
+    def set_clipboard(self, text: str, timeout: int = 5) -> None:
         """Copy text to macOS clipboard."""
-        subprocess.run(["pbcopy"], input=text, text=True, check=False)
+        try:
+            subprocess.run(["pbcopy"], input=text, text=True, check=False, timeout=timeout)
+        except Exception:
+            pass
 
     # --- Browser Category (Safari & Google Chrome) ---
 
-    def browser_get_url(self, browser: str = "Safari") -> str:
+    def browser_get_url(self, browser: str = "Safari", timeout: int = 10) -> str:
         """Get URL of active tab in browser."""
         b_lower = browser.lower()
         if "chrome" in b_lower:
             script = 'tell application "Google Chrome" to return URL of active tab of front window'
         else:
             script = 'tell application "Safari" to return URL of front document'
-        proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
-        return _clean_osascript_output(proc.stdout)
+        try:
+            proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False, timeout=timeout)
+            return _clean_osascript_output(proc.stdout)
+        except Exception:
+            return ""
 
-    def browser_get_tab_title(self, browser: str = "Safari") -> str:
+    def browser_get_tab_title(self, browser: str = "Safari", timeout: int = 10) -> str:
         """Get tab title of active tab in browser."""
         b_lower = browser.lower()
         if "chrome" in b_lower:
             script = 'tell application "Google Chrome" to return title of active tab of front window'
         else:
             script = 'tell application "Safari" to return name of front document'
-        proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
-        return _clean_osascript_output(proc.stdout)
+        try:
+            proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False, timeout=timeout)
+            return _clean_osascript_output(proc.stdout)
+        except Exception:
+            return ""
 
-    def browser_navigate(self, url: str, browser: str = "Safari") -> bool:
+    def browser_navigate(self, url: str, browser: str = "Safari", timeout: int = 15) -> bool:
         """Navigate active tab to a URL."""
         if not url.startswith("http://") and not url.startswith("https://"):
             url = "https://" + url
@@ -398,8 +484,11 @@ class Computer:
             script = f'tell application "Google Chrome" to set URL of active tab of front window to "{clean_url}"'
         else:
             script = f'tell application "Safari" to set URL of front document to "{clean_url}"'
-        proc = subprocess.run(["osascript", "-e", script], capture_output=True, check=False)
-        return proc.returncode == 0
+        try:
+            proc = subprocess.run(["osascript", "-e", script], capture_output=True, check=False, timeout=timeout)
+            return proc.returncode == 0
+        except Exception:
+            return False
 
     def browser_search(self, query: str, browser: str = "Safari") -> bool:
         """Search query in Google in the browser."""
@@ -407,15 +496,18 @@ class Computer:
         url = f"https://www.google.com/search?q={quote_plus(query)}"
         return self.browser_navigate(url, browser=browser)
 
-    def browser_read_page(self, browser: str = "Safari") -> str:
+    def browser_read_page(self, browser: str = "Safari", timeout: int = 15) -> str:
         """Extract inner text from active webpage."""
         b_lower = browser.lower()
         if "chrome" in b_lower:
             script = 'tell application "Google Chrome" to return execute front window\'s active tab javascript "document.body.innerText"'
         else:
             script = 'tell application "Safari" to return do JavaScript "document.body.innerText" in front document'
-        proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
-        return _clean_osascript_output(proc.stdout)
+        try:
+            proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False, timeout=timeout)
+            return _clean_osascript_output(proc.stdout)
+        except Exception:
+            return ""
 
     # --- Chat and Messaging Category ---
 
@@ -453,6 +545,69 @@ class Computer:
                 if cx is not None and cy is not None:
                     self.click(int(cx), int(cy))
                     return True
+        return False
+
+    def som_observe(
+        self,
+        active_window_only: bool = False,
+        save_path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Capture screen and generate a Set-of-Marks (SoM) annotated image.
+        Overlays numbered tags on detected UI elements so VLMs can easily reference
+        elements by numeric ID rather than spatial coordinates.
+        """
+        from computer_use.som import create_som_overlay, image_to_base64
+        from PIL import Image
+        import io
+
+        if active_window_only:
+            shot = self.screenshot_active_window()
+        else:
+            shot = self.screenshot()
+
+        raw_bytes = base64.b64decode(shot["base64"])
+        pil_img = Image.open(io.BytesIO(raw_bytes))
+
+        ocr_res = self.extract_text(active_window_only=active_window_only, fast=True)
+        scale_ratio = shot.get("scale_ratio", 2.0)
+
+        annotated_img, marks = create_som_overlay(
+            image=pil_img,
+            ocr_results=ocr_res,
+            scale_factor=scale_ratio
+        )
+
+        b64 = image_to_base64(annotated_img)
+        if save_path:
+            annotated_img.save(save_path)
+
+        return {
+            "image_path": save_path,
+            "base64": b64,
+            "width": annotated_img.width,
+            "height": annotated_img.height,
+            "scale_ratio": scale_ratio,
+            "marks": marks,
+            "count": len(marks)
+        }
+
+    def click_mark(
+        self,
+        mark_id: int,
+        marks_registry: Dict[Union[int, str], Dict[str, Any]]
+    ) -> bool:
+        """
+        Click the center of a mark by its numeric ID from a Set-of-Marks observation.
+        """
+        target = marks_registry.get(mark_id) or marks_registry.get(str(mark_id))
+        if not target:
+            return False
+        cx = target.get("center_x")
+        cy = target.get("center_y")
+        if cx is not None and cy is not None:
+            self.click(int(cx), int(cy))
+            return True
         return False
 
     # --- Utility Category ---

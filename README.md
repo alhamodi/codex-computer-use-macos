@@ -9,52 +9,73 @@ Written in Objective-C and Python, running natively on macOS (with full support 
 
 ## 🌟 What's New in the Computer Use Edition
 
-1. **Native Scrolling (`s:coords,dy[,dx]` or `s:dy`)**:
+1. **Humanized Smooth Cursor Motion & Easing (`cubicEaseInOut`)**:
+   - Continuous, human-like visible cursor paths at ~120Hz updates instead of instant coordinate teleportation.
+   - Configurable move duration in CLI and Python SDK (`move_duration=120ms`).
+
+2. **User Takeover Fail-safe Protection (`-u` / `failsafe`)**:
+   - Real-time physical mouse drift monitoring (>35pt).
+   - If the user moves their physical mouse during automation, execution aborts instantly with `UserTakeoverError` / `user_takeover`, guaranteeing user sovereignty over the desktop.
+
+3. **Sub-Second Native Apple Vision OCR**:
+   - Optimized with `VNRequestTextRecognitionLevelFast` and window ROI cropping, reducing OCR time from 58.5s down to **< 870ms** (67x speedup).
+
+4. **Visual Grounding with Set-of-Marks (SoM)**:
+   - Overlays numbered badge pills over detected interactive UI elements.
+   - AI models reference marks by index (`som_observe` ➔ `click_mark(3)`) eliminating pixel-guessing hallucinations.
+
+5. **DaVinci Resolve 21 Specialized Profile (`computer_use.profiles.davinci`)**:
+   - Deep native automation for Blackmagic Design DaVinci Resolve 21.
+   - Instant workspace page switching (`media`, `cut`, `edit`, `fusion`, `color`, `fairlight`, `deliver`) via macOS menu bar API in < 20ms.
+   - Non-destructive project manager discovery and card interaction without hardcoded coordinates.
+
+6. **Native Scrolling (`s:coords,dy[,dx]` or `s:dy`)**:
    - Full vertical & horizontal scroll wheel simulation via CoreGraphics.
    - Example: `cliclick s:500,300,-5` (scroll down 5 lines at coordinates 500, 300).
    - Example: `cliclick s:-10` (scroll down 10 lines at current location).
 
-2. **Native Screenshots (`sc:[path]` or `sc:-`)**:
+7. **Native Screenshots (`sc:[path]` or `sc:-`)**:
    - Capture display screenshots directly to a PNG file or output as base64 string to stdout.
    - Example: `cliclick sc:/tmp/screen.png`
    - Example: `cliclick sc:-` (outputs base64 PNG string for vision models).
 
-3. **Middle Click (`mc:coords`)**:
+8. **Middle Click (`mc:coords`)**:
    - Emulates middle mouse button (mouse button 2/3) clicks.
    - Example: `cliclick mc:250,400`
 
-4. **Atomic Hotkeys (`hk:modifier+key`)**:
+9. **Atomic Hotkeys (`hk:modifier+key`)**:
    - Single command to press modifier keys (`cmd`, `shift`, `alt`/`opt`, `ctrl`, `fn`), hit the target key, and release.
+   - ANSI keycode fallback ensures reliable hotkeys even when the active macOS keyboard layout is Arabic or non-Latin.
    - Example: `cliclick hk:cmd,c` (Copy)
    - Example: `cliclick hk:cmd+shift+p`
    - Example: `cliclick hk:cmd,space` (Spotlight search)
 
-5. **Display & Screen Info (`si`)**:
-   - Returns structured JSON with logical points resolution (e.g. 1440x900), backing scale factor (Retina 2.0x), and physical pixel dimensions (2880x1800).
-   - Example: `cliclick si`
+10. **Display & Screen Info (`si`)**:
+    - Returns structured JSON with logical points resolution (e.g. 1440x900), backing scale factor (Retina 2.0x), and physical pixel dimensions (2880x1800).
+    - Example: `cliclick si`
 
-6. **Active Window & Frontmost App Info (`wi`)**:
-   - Returns frontmost application name, bundle ID, process ID, window title, and window bounds.
-   - Example: `cliclick wi`
+11. **Active Window & Frontmost App Info (`wi`)**:
+    - Returns frontmost application name, bundle ID, process ID, window title, and window bounds.
+    - Example: `cliclick wi`
 
-7. **Structured JSON Mode (`-j <json>` or `-j -`)**:
-   - Direct execution of JSON action payloads matching Anthropic Computer Use and OpenAI Codex action schemas.
-   - Example:
-     ```bash
-     cliclick -j '{"action": "left_click", "coordinate": [500, 300]}'
-     ```
-   - Chained multi-action batching:
-     ```bash
-     cliclick -j '[{"action": "mouse_move", "coordinate": [200, 200]}, {"action": "cursor_position"}]'
-     ```
+12. **Structured JSON Mode (`-j <json>` or `-j -`)**:
+    - Direct execution of JSON action payloads matching Anthropic Computer Use and OpenAI Codex action schemas.
+    - Example:
+      ```bash
+      cliclick -j '{"action": "left_click", "coordinate": [500, 300]}'
+      ```
+    - Chained multi-action batching:
+      ```bash
+      cliclick -j '[{"action": "mouse_move", "coordinate": [200, 200]}, {"action": "cursor_position"}]'
+      ```
 
-8. **Python Computer Use SDK (`computer_use`)**:
-   - High-level Python controller (`Computer()`) with automatic Retina coordinate translation, PIL image resizing for vision models, and batch execution.
+13. **Python Computer Use SDK (`computer_use`)**:
+    - High-level Python controller (`Computer()`) with automatic Retina coordinate translation, PIL image resizing for vision models, Set-of-Marks, and batch execution.
 
-9. **Model Context Protocol (MCP) Server**:
-   - Built-in stdio MCP server for immediate connection to Claude Desktop, Antigravity, Cursor, Codex, OpenCode, and any MCP client.
+14. **Model Context Protocol (MCP) Server (45 Tools)**:
+    - Built-in stdio MCP server for immediate connection to Claude Desktop, Antigravity, Cursor, Codex, OpenCode, and any MCP client.
 
-10. **Autonomous Vision Agent Loop (`computer-use agent "task"`)**:
+15. **Autonomous Vision Agent Loop (`computer-use agent "task"`)**:
     - Complete agent loop that captures screenshots, prompts an LLM with vision, and executes computer actions step-by-step.
 
 ---

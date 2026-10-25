@@ -84,6 +84,10 @@
 
             CGRect imageRect = CGRectMake(p.x, p.y, 1, 1);
             CGImageRef imageRef = CGWindowListCreateImage(imageRect, kCGWindowListOptionOnScreenOnly, kCGNullWindowID, kCGWindowImageDefault);
+            if (imageRef == NULL) {
+                [NSException raise:@"ColorPickerException"
+                            format:@"Failed to capture pixel at location %i,%i", (int)p.x, (int)p.y];
+            }
             NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithCGImage:imageRef];
             CGImageRelease(imageRef);
             NSColor *color = [bitmap colorAtX:0 y:0];

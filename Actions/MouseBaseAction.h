@@ -89,6 +89,18 @@ typedef enum {
                                              toX:(float)endX
                                              toY:(float)endY;
 
+/**
+ * Moves the cursor visibly along a cubic ease-in-out path over the given duration.
+ *
+ * When failsafe is YES, the real cursor location is compared with the last
+ * posted point before every step; a deviation larger than the takeover
+ * threshold raises a UserInterruptedException (the user grabbed the mouse).
+ */
+- (void)postVisibleMouseEventsWithDuration:(unsigned)durationMs
+                                       toX:(float)endX
+                                       toY:(float)endY
+                                  failsafe:(BOOL)failsafe;
+
 - (uint32_t)getMoveEventConstant;
 
 @end

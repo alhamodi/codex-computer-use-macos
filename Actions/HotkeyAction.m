@@ -39,15 +39,29 @@
                     format:@"Missing argument to command “%@”. Example: “%@:cmd,c”", shortcut, shortcut];
     }
 
-    NSString *normalizedData = [data stringByReplacingOccurrencesOfString:@"+" withString:@","];
+    BOOL endsWithPlus = NO;
+    NSString *dataToParse = data;
+    if ([dataToParse hasSuffix:@"++"] || [dataToParse hasSuffix:@",+"]) {
+        endsWithPlus = YES;
+        dataToParse = [dataToParse substringToIndex:[dataToParse length] - 1];
+        if ([dataToParse hasSuffix:@"+"] || [dataToParse hasSuffix:@","]) {
+            dataToParse = [dataToParse substringToIndex:[dataToParse length] - 1];
+        }
+    }
+
+    NSString *normalizedData = [dataToParse stringByReplacingOccurrencesOfString:@"+" withString:@","];
     NSArray *rawTokens = [normalizedData componentsSeparatedByString:@","];
-    NSMutableArray *tokens = [NSMutableArray arrayWithCapacity:[rawTokens count]];
+    NSMutableArray *tokens = [NSMutableArray arrayWithCapacity:[rawTokens count] + 1];
 
     for (NSString *token in rawTokens) {
         NSString *trimmed = [token stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         if ([trimmed length] > 0) {
             [tokens addObject:[trimmed lowercaseString]];
         }
+    }
+
+    if (endsWithPlus) {
+        [tokens addObject:@"+"];
     }
 
     if ([tokens count] < 2) {
@@ -97,11 +111,32 @@
         targetKeyCode = (CGKeyCode)[codeStr intValue];
         foundKey = YES;
     } else {
-        NSArray *codes = [[KeycodeInformer sharedInstance] keyCodesForString:targetKey];
-        if ([codes count] > 0) {
-            NSArray *firstInfo = [codes objectAtIndex:0];
-            targetKeyCode = (CGKeyCode)[[firstInfo objectAtIndex:0] intValue];
+        // ANSI keycode table for standard Latin characters and symbols
+        // guarantees shortcuts work regardless of current active keyboard layout (e.g. Arabic)
+        static NSDictionary *ansiKeys = nil;
+        if (!ansiKeys) {
+            ansiKeys = [[NSDictionary alloc] initWithObjectsAndKeys:
+                        @0, @"a", @1, @"s", @2, @"d", @3, @"f", @4, @"h", @5, @"g", @6, @"z", @7, @"x",
+                        @8, @"c", @9, @"v", @11, @"b", @12, @"q", @13, @"w", @14, @"e", @15, @"r", @16, @"y",
+                        @17, @"t", @18, @"1", @19, @"2", @20, @"3", @21, @"4", @22, @"6", @23, @"5",
+                        @24, @"=", @24, @"+", @24, @"plus", @25, @"9", @26, @"7", @27, @"-", @27, @"minus",
+                        @28, @"8", @29, @"0", @30, @"]", @31, @"o", @32, @"u", @33, @"[", @34, @"i", @35, @"p",
+                        @37, @"l", @38, @"j", @39, @"'", @39, @"quote", @40, @"k", @41, @";", @42, @"\\",
+                        @43, @",", @43, @"comma", @44, @"/", @44, @"slash", @45, @"n", @46, @"m", @47, @".",
+                        @47, @"period", @50, @"`", nil];
+        }
+
+        NSNumber *ansiNum = [ansiKeys objectForKey:targetKey];
+        if (ansiNum != nil) {
+            targetKeyCode = (CGKeyCode)[ansiNum intValue];
             foundKey = YES;
+        } else {
+            NSArray *codes = [[KeycodeInformer sharedInstance] keyCodesForString:targetKey];
+            if ([codes count] > 0) {
+                NSArray *firstInfo = [codes objectAtIndex:0];
+                targetKeyCode = (CGKeyCode)[[firstInfo objectAtIndex:0] intValue];
+                foundKey = YES;
+            }
         }
     }
 

@@ -128,7 +128,14 @@
         return;
     }
 
-    if (options.easing) {
+    if (options.moveDuration) {
+        // Visible time-based move (lets the user follow the cursor)
+        [self postVisibleMouseEventsWithDuration:options.moveDuration
+                                             toX:(float)p.x
+                                             toY:(float)p.y
+                                        failsafe:options.failsafe];
+        CGWarpMouseCursorPosition(p);
+    } else if (options.easing) {
         // Eased move
         [self postHumanizedMouseEventsWithEasingFactor:options.easing
                                                    toX:(float)p.x
@@ -173,6 +180,57 @@
         CGEventPost(kCGHIDEventTap, eventRef);
         CFRelease(eventRef);
         usleep(220);
+    }
+}
+
+- (void)postVisibleMouseEventsWithDuration:(unsigned)durationMs
+                                       toX:(float)endX
+                                       toY:(float)endY
+                                  failsafe:(BOOL)failsafe {
+
+    CGEventRef ourEvent = CGEventCreate(NULL);
+    CGPoint start = CGEventGetLocation(ourEvent);
+    CFRelease(ourEvent);
+
+    float distance = [self distanceBetweenPoint:NSPointFromCGPoint(start) andPoint:NSMakePoint(endX, endY)];
+    if (distance < 2.0) {
+        return;
+    }
+
+    // ~120 Hz updates; short hops get proportionally shorter durations
+    unsigned effectiveMs = durationMs;
+    if (distance < 150.0) {
+        effectiveMs = (unsigned)MAX(40.0, durationMs * (distance / 150.0));
+    }
+    unsigned steps = MAX(8u, effectiveMs / 8u);
+    useconds_t stepSleep = (useconds_t)((effectiveMs * 1000u) / steps);
+
+    uint32_t eventConstant = [self getMoveEventConstant];
+    float xDiff = endX - start.x;
+    float yDiff = endY - start.y;
+    CGPoint lastPosted = start;
+    const double threshold = 35.0;
+
+    for (unsigned i = 1; i <= steps; i++) {
+        if (failsafe) {
+            CGEventRef probe = CGEventCreate(NULL);
+            CGPoint actual = CGEventGetLocation(probe);
+            CFRelease(probe);
+            double dx = actual.x - lastPosted.x;
+            double dy = actual.y - lastPosted.y;
+            if ((dx * dx + dy * dy) > threshold * threshold) {
+                [NSException raise:@"UserInterruptedException"
+                            format:@"User takeover detected during cursor motion (dx: %.0f, dy: %.0f)", dx, dy];
+            }
+        }
+
+        float factor = [self cubicEaseInOut:((float)i / (float)steps)];
+        CGPoint pt = CGPointMake(start.x + factor * xDiff, start.y + factor * yDiff);
+        CGEventRef eventRef = CGEventCreateMouseEvent(NULL, eventConstant, pt, kCGMouseButtonLeft);
+        CGEventPost(kCGHIDEventTap, eventRef);
+        CFRelease(eventRef);
+        lastPosted = pt;
+        usleep(stepSleep);
     }
 }
 

@@ -27,8 +27,10 @@ int main (int argc, const char * argv[]) {
 
     struct ExecutionOptions executionOptions;
     executionOptions.easing = 0;
+    executionOptions.moveDuration = 0;
     executionOptions.waitTime = 0;
     executionOptions.mode = MODE_REGULAR;
+    executionOptions.failsafe = NO;
     NSArray *modeOptionArg;
     NSString *verbosityOutputDestination = nil;
     NSString *filepath = nil;
@@ -46,12 +48,15 @@ int main (int argc, const char * argv[]) {
         fprintf(stderr, "         System Preferences → Security & Privacy → Accessibility\n");
     }
 
-    while ((optchar = getopt(argc, (char * const *)argv, "horVne:f:d:m:w:j:")) != -1) {
+    while ((optchar = getopt(argc, (char * const *)argv, "huorVne:f:d:m:w:j:")) != -1) {
         switch(optchar) {
             case 'h':
                 help();
                 [pool release];
                 return EXIT_SUCCESS;
+            case 'u':
+                executionOptions.failsafe = YES;
+                break;
             case 'V':
                 printf("%s\n", [[NSString stringWithFormat:@"cliclick %@ (Computer Use Edition), %@", VERSION, RELEASEDATE] UTF8String]);
                 [pool release];
@@ -114,9 +119,11 @@ int main (int argc, const char * argv[]) {
     }
     @catch (NSException *e) {
         if (isJsonMode) {
+            BOOL isUserInterruption = [[e name] isEqualToString:@"UserInterruptedException"];
             NSDictionary *errResp = [NSDictionary dictionaryWithObjectsAndKeys:
-                                     @"error", @"status",
-                                     [e reason], @"error", nil];
+                                     (isUserInterruption ? @"interrupted" : @"error"), @"status",
+                                     [e reason], @"error",
+                                     (isUserInterruption ? @"user_takeover" : @"execution_failure"), @"reason", nil];
             NSData *d = [NSJSONSerialization dataWithJSONObject:errResp options:0 error:nil];
             printf("%s\n", [[[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] autorelease].UTF8String);
         } else {
@@ -150,6 +157,21 @@ int main (int argc, const char * argv[]) {
             printf("%s\n", [[[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] autorelease].UTF8String);
             [pool release];
             return EXIT_FAILURE;
+        }
+
+        if ([parsedObj isKindOfClass:[NSDictionary class]]) {
+            if ([parsedObj objectForKey:@"easing"]) {
+                executionOptions.easing = (unsigned)[[parsedObj objectForKey:@"easing"] intValue];
+            }
+            if ([parsedObj objectForKey:@"move_duration"]) {
+                executionOptions.moveDuration = (unsigned)[[parsedObj objectForKey:@"move_duration"] intValue];
+            }
+            if ([parsedObj objectForKey:@"wait_ms"]) {
+                executionOptions.waitTime = (unsigned)[[parsedObj objectForKey:@"wait_ms"] intValue];
+            }
+            if ([parsedObj objectForKey:@"failsafe"]) {
+                executionOptions.failsafe = [[parsedObj objectForKey:@"failsafe"] boolValue];
+            }
         }
 
         NSError *mappingErr = nil;
@@ -195,9 +217,11 @@ int main (int argc, const char * argv[]) {
     }
     @catch (NSException *e) {
         if (isJsonMode) {
+            BOOL isUserInterruption = [[e name] isEqualToString:@"UserInterruptedException"];
             NSDictionary *errResp = [NSDictionary dictionaryWithObjectsAndKeys:
-                                     @"error", @"status",
-                                     [e reason], @"error", nil];
+                                     (isUserInterruption ? @"interrupted" : @"error"), @"status",
+                                     [e reason], @"error",
+                                     (isUserInterruption ? @"user_takeover" : @"execution_failure"), @"reason", nil];
             NSData *d = [NSJSONSerialization dataWithJSONObject:errResp options:0 error:nil];
             printf("%s\n", [[[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] autorelease].UTF8String);
         } else {
@@ -240,7 +264,11 @@ int main (int argc, const char * argv[]) {
 NSArray* parseJsonToActions(id jsonObj, NSError **error) {
     NSArray *items = nil;
     if ([jsonObj isKindOfClass:[NSDictionary class]]) {
-        items = [NSArray arrayWithObject:jsonObj];
+        if ([jsonObj objectForKey:@"actions"] && [[jsonObj objectForKey:@"actions"] isKindOfClass:[NSArray class]]) {
+            items = [jsonObj objectForKey:@"actions"];
+        } else {
+            items = [NSArray arrayWithObject:jsonObj];
+        }
     } else if ([jsonObj isKindOfClass:[NSArray class]]) {
         items = (NSArray *)jsonObj;
     } else {
@@ -375,9 +403,11 @@ NSArray* parseJsonToActions(id jsonObj, NSError **error) {
                 [actions addObject:@"scw:-"];
             }
         } else if ([action isEqualToString:@"extract_text"]) {
-            [actions addObject:@"ocr"];
+            BOOL fast = [[dict objectForKey:@"fast"] boolValue];
+            [actions addObject:fast ? @"ocr:fast" : @"ocr"];
         } else if ([action isEqualToString:@"extract_text_active_window"]) {
-            [actions addObject:@"ocr:active_window"];
+            BOOL fast = [[dict objectForKey:@"fast"] boolValue];
+            [actions addObject:fast ? @"ocr:active_window,fast" : @"ocr:active_window"];
         } else if ([action isEqualToString:@"list_windows"]) {
             [actions addObject:@"lw"];
         } else if ([action isEqualToString:@"focus_window"]) {
