@@ -56,10 +56,15 @@ macOS requires two privacy permissions:
 - `safari_search(query)` / `chrome_search(query)`: Search Google in the browser.
 - `safari_read_page` / `chrome_read_page`: Read inner text of active web page.
 
-### 6. UI Automation & Visual Grounding
+### 6. UI Automation, Smart Polling & Visual Grounding
 - `find_and_click_element(text, active_window_only=False)`: Search for an on-screen button or label using Apple Vision OCR and click its exact center automatically.
 - `som_observe(active_window_only=False, save_path=None)`: Capture screenshot and overlay Set-of-Marks (numbered badges on detected UI elements) for reliable grounding by vision models without pixel hallucination.
 - `click_mark(mark_id, marks)`: Click a numbered UI element mark identified from `som_observe`.
+- `human_click(x, y, hover_ms=150, hold_ms=80)`: Realistic 3-phase click: smooth movement, hover dwell (fires React/DOM pointerover), and hold duration before mouse up.
+- `hover(x, y, duration_ms=200)`: Hover over an element to trigger CSS `:hover` or JavaScript dropdowns.
+- `wait_until_condition(condition, target, timeout=30)`: Smart state polling (`text_appears`, `text_disappears`, `window_title_contains`) instead of brittle static delays.
+- `handle_file_dialog(file_path)`: Guaranteed macOS file chooser dialog automation via `Cmd+Shift+G` sheet and unicode path injection.
+- `verify_action_result(success_keywords, blocker_keywords)`: Automated verification of actions (e.g. upload complete, terms blocker detected, error banner found).
 
 ### 7. DaVinci Resolve 21 Automation
 - `davinci_status`: Get operational status (is running, active project name, window bounds, project manager state).

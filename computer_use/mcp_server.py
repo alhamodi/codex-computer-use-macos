@@ -490,6 +490,86 @@ class MCPServer:
                     },
                     "required": ["mark_id", "marks"]
                 }
+            },
+            # Smart Automation & Humanized Interaction
+            {
+                "name": "human_click",
+                "description": "Execute a realistic 3-phase human click: smooth cursor movement with easing, hover dwell (triggers React/DOM pointerover), and hold duration before release.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "x": {"type": "integer", "description": "X coordinate in screen points"},
+                        "y": {"type": "integer", "description": "Y coordinate in screen points"},
+                        "hover_ms": {"type": "integer", "description": "Hover dwell time in ms before pressing", "default": 150},
+                        "hold_ms": {"type": "integer", "description": "Hold duration in ms before releasing", "default": 80}
+                    },
+                    "required": ["x", "y"]
+                }
+            },
+            {
+                "name": "hover",
+                "description": "Move cursor to (x, y) and hover there for duration_ms to trigger CSS/DOM hover and pointerover events.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "x": {"type": "integer", "description": "X coordinate in screen points"},
+                        "y": {"type": "integer", "description": "Y coordinate in screen points"},
+                        "duration_ms": {"type": "integer", "description": "Hover duration in ms", "default": 200}
+                    },
+                    "required": ["x", "y"]
+                }
+            },
+            {
+                "name": "wait_until_condition",
+                "description": "Intelligent state polling engine: wait for text_appears, text_disappears, or window_title_contains instead of brittle sleeps.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "condition": {
+                            "type": "string",
+                            "enum": ["text_appears", "text_disappears", "window_title_contains"],
+                            "description": "Condition type to wait for"
+                        },
+                        "target": {"type": "string", "description": "Target text or substring"},
+                        "timeout": {"type": "number", "description": "Max timeout in seconds", "default": 30.0},
+                        "poll_interval": {"type": "number", "description": "Seconds between checks", "default": 0.8},
+                        "active_window_only": {"type": "boolean", "description": "Limit OCR search to active window", "default": False}
+                    },
+                    "required": ["condition", "target"]
+                }
+            },
+            {
+                "name": "handle_file_dialog",
+                "description": "Automate macOS Open/Save file chooser sheet (Cmd+Shift+G, input path, confirm).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "Absolute or home-relative path of file to select"},
+                        "timeout": {"type": "number", "description": "Max timeout in seconds", "default": 10.0}
+                    },
+                    "required": ["file_path"]
+                }
+            },
+            {
+                "name": "verify_action_result",
+                "description": "Verify action outcome by watching for success indicators while watching for blocker keywords (terms agreement, copyright warnings, errors).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "success_keywords": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of keywords indicating success (e.g. ['shared', 'published'])"
+                        },
+                        "blocker_keywords": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional list of keywords indicating blockers (e.g. ['agree', 'terms', 'error'])"
+                        },
+                        "timeout": {"type": "number", "description": "Max timeout in seconds", "default": 15.0}
+                    },
+                    "required": ["success_keywords"]
+                }
             }
         ]
 
@@ -750,6 +830,49 @@ class MCPServer:
         elif name == "click_mark":
             ok = self.computer.click_mark(args["mark_id"], args["marks"])
             return [{"type": "text", "text": json.dumps({"clicked": ok})}]
+
+        # Smart Automation Handlers
+        elif name == "human_click":
+            res = self.computer.human_click(
+                x=args["x"],
+                y=args["y"],
+                hover_ms=args.get("hover_ms", 150),
+                hold_ms=args.get("hold_ms", 80)
+            )
+            return [{"type": "text", "text": json.dumps(res, indent=2)}]
+
+        elif name == "hover":
+            res = self.computer.hover(
+                x=args["x"],
+                y=args["y"],
+                duration_ms=args.get("duration_ms", 200)
+            )
+            return [{"type": "text", "text": json.dumps(res, indent=2)}]
+
+        elif name == "wait_until_condition":
+            res = self.computer.wait_until_condition(
+                condition=args["condition"],
+                target=args["target"],
+                timeout=args.get("timeout", 30.0),
+                poll_interval=args.get("poll_interval", 0.8),
+                active_window_only=args.get("active_window_only", False)
+            )
+            return [{"type": "text", "text": json.dumps(res, indent=2)}]
+
+        elif name == "handle_file_dialog":
+            res = self.computer.handle_file_dialog(
+                file_path=args["file_path"],
+                timeout=args.get("timeout", 10.0)
+            )
+            return [{"type": "text", "text": json.dumps(res, indent=2)}]
+
+        elif name == "verify_action_result":
+            res = self.computer.verify_action_result(
+                success_keywords=args["success_keywords"],
+                blocker_keywords=args.get("blocker_keywords"),
+                timeout=args.get("timeout", 15.0)
+            )
+            return [{"type": "text", "text": json.dumps(res, indent=2)}]
 
         else:
             raise ValueError(f"Unknown tool: {name}")

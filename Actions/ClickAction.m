@@ -57,7 +57,7 @@
     CGEventPost(kCGHIDEventTap, leftDown);
     CFRelease(leftDown);
 
-    usleep(15000); // Improve reliability
+    usleep(40000); // 40ms hold time to ensure modern web frameworks (React/WebKit) register mouseup
 
     // Left button up
     CGEventRef leftUp = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, p, kCGMouseButtonLeft);

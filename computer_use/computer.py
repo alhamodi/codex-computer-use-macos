@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -289,6 +290,39 @@ class Computer:
         if x is not None and y is not None:
             payload["coordinate"] = [x, y]
         return self.execute_json(payload)
+
+    def hover(self, x: int, y: int, duration_ms: int = 200) -> Dict[str, Any]:
+        """
+        Move smoothly to (x, y) and hover there for duration_ms to trigger
+        browser/UI pointerover, mouseenter, and CSS hover states.
+        """
+        batch = [
+            {"action": "mouse_move", "coordinate": [x, y]},
+            {"action": "wait", "ms": duration_ms}
+        ]
+        return self.batch_actions(batch)
+
+    def human_click(
+        self,
+        x: int,
+        y: int,
+        hover_ms: int = 150,
+        hold_ms: int = 80
+    ) -> Dict[str, Any]:
+        """
+        Execute a realistic 3-phase human click:
+        1. Smooth cursor movement with cubic easing to (x, y)
+        2. Dwell/hover for hover_ms (triggers React/DOM pointerover, mouseenter, CSS hover)
+        3. Mouse down -> wait hold_ms -> mouse up
+        """
+        batch = [
+            {"action": "mouse_move", "coordinate": [x, y]},
+            {"action": "wait", "ms": hover_ms},
+            {"action": "mouse_down", "coordinate": [x, y]},
+            {"action": "wait", "ms": hold_ms},
+            {"action": "mouse_up", "coordinate": [x, y]}
+        ]
+        return self.batch_actions(batch)
 
     def move(self, x: int, y: int) -> Dict[str, Any]:
         """Move mouse cursor to (x, y)."""
@@ -609,6 +643,163 @@ class Computer:
             self.click(int(cx), int(cy))
             return True
         return False
+
+    # --- Smart Automation, State Polling & Workflow Verification ---
+
+    def wait_until_condition(
+        self,
+        condition: str,
+        target: str,
+        timeout: float = 30.0,
+        poll_interval: float = 0.8,
+        active_window_only: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Intelligent state polling engine: replaces brittle static sleeps by waiting
+        for a specific UI condition to be satisfied.
+
+        Supported conditions:
+        - 'text_appears': waits until target text is visible on screen/active window.
+        - 'text_disappears': waits until target text (e.g. 'Uploading', 'Processing') is gone.
+        - 'window_title_contains': waits until active window title contains target substring.
+        """
+        start = time.time()
+        target_lower = target.lower()
+
+        while time.time() - start < timeout:
+            if condition == "text_appears":
+                ocr = self.extract_text(active_window_only=active_window_only, fast=True)
+                lines = [l.get("text", "") for l in ocr.get("lines", [])]
+                for line in lines:
+                    if target_lower in line.lower():
+                        return {
+                            "success": True,
+                            "condition": condition,
+                            "target": target,
+                            "matched_text": line,
+                            "elapsed_seconds": round(time.time() - start, 2)
+                        }
+
+            elif condition == "text_disappears":
+                ocr = self.extract_text(active_window_only=active_window_only, fast=True)
+                lines = [l.get("text", "") for l in ocr.get("lines", [])]
+                found = any(target_lower in line.lower() for line in lines)
+                if not found:
+                    return {
+                        "success": True,
+                        "condition": condition,
+                        "target": target,
+                        "elapsed_seconds": round(time.time() - start, 2)
+                    }
+
+            elif condition == "window_title_contains":
+                win = self.active_window()
+                title = win.get("title", "")
+                if target_lower in title.lower():
+                    return {
+                        "success": True,
+                        "condition": condition,
+                        "target": target,
+                        "window_title": title,
+                        "elapsed_seconds": round(time.time() - start, 2)
+                    }
+
+            else:
+                raise ValueError(f"Unsupported condition: {condition}")
+
+            time.sleep(poll_interval)
+
+        return {
+            "success": False,
+            "error": "timeout",
+            "condition": condition,
+            "target": target,
+            "timeout_seconds": timeout,
+            "elapsed_seconds": round(time.time() - start, 2)
+        }
+
+    def handle_file_dialog(self, file_path: str, timeout: float = 10.0) -> Dict[str, Any]:
+        """
+        Automates macOS Open/Save file chooser dialogs:
+        Sends Cmd+Shift+G ('Go to folder'), enters file path cleanly without loss,
+        confirms navigation, and triggers confirmation.
+        """
+        import os
+        abs_path = os.path.abspath(os.path.expanduser(file_path))
+        if not os.path.exists(abs_path):
+            return {"success": False, "error": f"File does not exist: {abs_path}"}
+
+        # Press Cmd+Shift+G to trigger the 'Go to the folder:' sheet in Finder dialog
+        self.hotkey("cmd", "shift", "g")
+        time.sleep(0.6)
+
+        # Type full path via clipboard paste to prevent keyboard layout/character corruption
+        self.type_unicode(abs_path)
+        time.sleep(0.3)
+
+        # Press Return to go to the file in the dialog
+        self.key("return")
+        time.sleep(0.6)
+
+        # Press Return again to confirm selection (Open)
+        self.key("return")
+        time.sleep(0.5)
+
+        return {
+            "success": True,
+            "file_path": abs_path,
+            "message": "File path submitted to macOS file dialog"
+        }
+
+    def verify_action_result(
+        self,
+        success_keywords: List[str],
+        blocker_keywords: Optional[List[str]] = None,
+        timeout: float = 15.0,
+        active_window_only: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Post-action verification with diagnostic guardrails:
+        Continuously polls for success indicators while watching for known blocker keywords
+        (e.g., terms agreement checkbox, copyright warnings, CAPTCHA, upload failures).
+        """
+        blockers = blocker_keywords or [
+            "agree", "terms", "copyright", "failed", "error", "too large",
+            "format not supported", "captcha", "try again", "invalid"
+        ]
+        start = time.time()
+
+        while time.time() - start < timeout:
+            ocr = self.extract_text(active_window_only=active_window_only, fast=True)
+            lines = [l.get("text", "") for l in ocr.get("lines", [])]
+            full_text = " ".join(lines).lower()
+
+            # Check for blockers first
+            detected_blockers = [b for b in blockers if b.lower() in full_text]
+            if detected_blockers:
+                return {
+                    "status": "blocked",
+                    "blockers": detected_blockers,
+                    "visible_lines": lines[:10],
+                    "elapsed_seconds": round(time.time() - start, 2)
+                }
+
+            # Check for success
+            for s in success_keywords:
+                if s.lower() in full_text:
+                    return {
+                        "status": "success",
+                        "matched_success": s,
+                        "elapsed_seconds": round(time.time() - start, 2)
+                    }
+
+            time.sleep(1.0)
+
+        return {
+            "status": "unverified",
+            "message": "Neither success nor blocker indicators detected before timeout",
+            "elapsed_seconds": round(time.time() - start, 2)
+        }
 
     # --- Utility Category ---
 

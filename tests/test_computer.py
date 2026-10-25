@@ -141,7 +141,8 @@ class TestComputerUse(unittest.TestCase):
             "batch_actions", "wait",
             "davinci_status", "davinci_switch_page", "davinci_project_manager",
             "davinci_open_project", "davinci_timeline_action",
-            "som_observe", "click_mark"
+            "som_observe", "click_mark",
+            "human_click", "hover", "wait_until_condition", "handle_file_dialog", "verify_action_result"
         ]
         
         for expected in expected_tools:
@@ -198,6 +199,52 @@ class TestComputerUse(unittest.TestCase):
         self.assertIsInstance(profile.PAGES, dict)
         self.assertIn("edit", profile.PAGES)
         self.assertIn("deliver", profile.PAGES)
+
+    def test_human_click_and_hover(self):
+        # Hover
+        res_hover = self.computer.hover(150, 150, duration_ms=20)
+        self.assertEqual(res_hover.get("status"), "success")
+
+        # Human click
+        res_click = self.computer.human_click(150, 150, hover_ms=20, hold_ms=20)
+        self.assertEqual(res_click.get("status"), "success")
+
+    def test_wait_until_condition_window_title(self):
+        # Current active window should match its own title substring quickly
+        win = self.computer.active_window()
+        title = win.get("title", "")
+        if title:
+            sub = title[:3]
+            res = self.computer.wait_until_condition(
+                condition="window_title_contains",
+                target=sub,
+                timeout=3.0,
+                poll_interval=0.2
+            )
+            self.assertTrue(res.get("success"))
+
+    def test_handle_file_dialog_nonexistent(self):
+        res = self.computer.handle_file_dialog("/nonexistent_folder/nonexistent_file_xyz123.mp4")
+        self.assertFalse(res.get("success"))
+        self.assertIn("error", res)
+
+    def test_verify_action_result_blocker(self):
+        # Test detection of blockers
+        from unittest.mock import patch
+        mock_ocr = {
+            "lines": [
+                {"text": "Upload failed. File format not supported."},
+                {"text": "Please try again."}
+            ]
+        }
+        with patch.object(self.computer, "extract_text", return_value=mock_ocr):
+            res = self.computer.verify_action_result(
+                success_keywords=["shared", "published"],
+                blocker_keywords=["failed", "error", "not supported"],
+                timeout=1.0
+            )
+            self.assertEqual(res.get("status"), "blocked")
+            self.assertIn("failed", res.get("blockers", []))
 
 
 if __name__ == "__main__":
