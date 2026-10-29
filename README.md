@@ -9,6 +9,28 @@ Written in Objective-C and Python, running natively on macOS (with full support 
 
 ## 🌟 What's New in the Computer Use Edition
 
+### Phase 2: Advanced AI Agent Architecture & Orchestration 🧠
+1. **Provider-Agnostic Model Layer (`computer_use.models`)**:
+   - Universal interface decoupling agent logic from specific LLM providers.
+   - Built-in adapters for **OpenAI** (Chat Completions & Computer Use) and a deterministic **Mock Provider** for offline CI/CD testing.
+   - Real-time token consumption tracking and cost estimation ($ USD) per turn.
+
+2. **Task Orchestrator & State Machine (`computer_use.orchestrator`)**:
+   - Formal multi-step task lifecycle: `CREATED` ➔ `PLANNING` ➔ `RUNNING` ➔ `WAITING` ➔ `VERIFYING` ➔ `AWAITING_APPROVAL` ➔ `RECOVERING` ➔ `COMPLETED` / `FAILED`.
+   - Stagnation and deadlock engine: detects repeated coordinates, identical OCR loops, and dead clicks, auto-injecting recovery guidance.
+   - Multi-modal verification of sub-goals before proceeding.
+
+3. **Semantic Goal Resolution Engine (`computer_use.semantic`)**:
+   - Resolves semantic intent (e.g. `find_element(role="button", query="Export")`) to exact screen coordinates using fused Accessibility (`AXUIElement`), Set-of-Marks, and Apple Vision OCR.
+
+4. **Multi-App Workflow Manager (`computer_use.workflows`)**:
+   - Cross-application workflow pipelines with automated verification gates.
+   - Specialized DaVinci Resolve 21 verified automation (process check, workspace page routing, and timeline state verification).
+
+---
+
+### Phase 1 Core Subsystems 🚀
+
 1. **Humanized Smooth Cursor Motion & Easing (`cubicEaseInOut`)**:
    - Continuous, human-like visible cursor paths at ~120Hz updates instead of instant coordinate teleportation.
    - Configurable move duration in CLI and Python SDK (`move_duration=120ms`).

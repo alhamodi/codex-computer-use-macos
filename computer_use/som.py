@@ -35,6 +35,14 @@ class StaleObservationError(RuntimeError):
 class GroundedMarkRegistry:
     """Manages ground-truth element marks, tracking creation time and screen UUIDs."""
 
+    _global_instance: Optional["GroundedMarkRegistry"] = None
+
+    @classmethod
+    def get_instance(cls) -> "GroundedMarkRegistry":
+        if cls._global_instance is None:
+            cls._global_instance = cls()
+        return cls._global_instance
+
     def __init__(self, ttl_seconds: float = 30.0):
         self.registry_id: str = str(uuid.uuid4())
         self.created_at: float = time.time()

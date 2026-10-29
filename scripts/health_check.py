@@ -8,11 +8,19 @@ Validates:
 """
 
 from __future__ import annotations
+import os
 import sys
 import time
+
+# Ensure project root is in sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from computer_use.computer import Computer
 from computer_use.mcp_server import MCPServer
+from computer_use.models.mock_provider import MockModelProvider
+from computer_use.orchestrator import TaskOrchestrator, TaskState
 from computer_use.security import RiskLevel, SecurityPolicy
+from computer_use.semantic import SemanticResolver
 
 
 def run_health_check() -> bool:
@@ -71,8 +79,25 @@ def run_health_check() -> bool:
         print(f"❌ Security Subsystem Failure: {e}")
         return False
 
+    # 6. Phase 2 Orchestration & Semantic Engine
+    try:
+        mock_prov = MockModelProvider()
+        orchestrator = TaskOrchestrator(model_provider=mock_prov, computer=computer, max_steps=2)
+        res = orchestrator.execute_goal("Diagnostic dry run")
+        if res.get("success"):
+            print(f"✅ Phase 2 Orchestrator & State Machine: Verified ({res['state']})")
+        else:
+            print(f"❌ Phase 2 Orchestrator Failure: {res.get('error')}")
+            return False
+
+        sem_resolver = SemanticResolver(computer=computer)
+        print("✅ Semantic Goal Resolver: Loaded (AX, SoM & Vision OCR)")
+    except Exception as e:
+        print(f"❌ Phase 2 Architecture Failure: {e}")
+        return False
+
     print("=" * 60)
-    print("🎉 ALL PLATFORM SUBSYSTEMS OPERATIONAL AND SECURE")
+    print("🎉 ALL PLATFORM SUBSYSTEMS (PHASE 1 + PHASE 2) OPERATIONAL AND SECURE")
     print("=" * 60)
     return True
 

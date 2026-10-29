@@ -227,7 +227,18 @@ class ActionGuard:
                     f"Action '{tool_name}' requires risk level {risk.name}, exceeding current policy limit {self.policy.max_allowed_risk.name}."
                 )
 
-        # 5. Interactive approval check
         if risk >= self.policy.require_approval_above and self.policy.approval_callback:
             if not self.policy.approval_callback(args, risk):
                 raise ActionDenied(f"Action '{tool_name}' rejected by human approver.")
+
+    _global_instance: Optional["ActionGuard"] = None
+
+    @classmethod
+    def get_instance(cls) -> "ActionGuard":
+        if cls._global_instance is None:
+            cls._global_instance = cls()
+        return cls._global_instance
+
+
+SecurityPolicyGuard = ActionGuard
+
