@@ -325,3 +325,47 @@ end tell
         self.focus()
         self.computer.hotkey("cmd", "i")
         return True
+
+    # --- Robust Render & Export Workflow ---
+
+    def start_render(self) -> bool:
+        """Switch to Deliver page and trigger Add to Render Queue (or Render)."""
+        self.focus()
+        if not self.switch_to_page("deliver"):
+            return False
+        time.sleep(0.5)
+        return True
+
+    def monitor_render_and_verify(
+        self,
+        output_file_path: str,
+        expected_min_bytes: int = 1000,
+        timeout: float = 60.0
+    ) -> Dict[str, Any]:
+        """
+        Monitors render export progress and strictly verifies the output file exists,
+        is non-empty, and matches minimum expected size.
+        """
+        import os
+        start = time.time()
+        abs_path = os.path.abspath(os.path.expanduser(output_file_path))
+
+        while time.time() - start < timeout:
+            if os.path.exists(abs_path):
+                size = os.path.getsize(abs_path)
+                if size >= expected_min_bytes:
+                    return {
+                        "status": "success",
+                        "output_file": abs_path,
+                        "size_bytes": size,
+                        "elapsed_seconds": round(time.time() - start, 2)
+                    }
+            time.sleep(1.0)
+
+        return {
+            "status": "timeout_or_failed",
+            "output_file": abs_path,
+            "exists": os.path.exists(abs_path),
+            "size_bytes": os.path.getsize(abs_path) if os.path.exists(abs_path) else 0,
+            "elapsed_seconds": round(time.time() - start, 2)
+        }

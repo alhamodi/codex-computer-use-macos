@@ -20,13 +20,19 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 try:
     from PIL import Image
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
+
+from computer_use.security import ActionGuard, RiskLevel, SecurityPolicy, SecurityViolation
+from computer_use.session import ComputerSession, SessionManager, SessionState
+from computer_use.accessibility import AccessibilityInspector
+from computer_use.verification import ActionVerifier, VerificationResult, VerificationState
+from computer_use.browser import BrowserController
 
 
 def _clean_osascript_output(output: str) -> str:
@@ -55,7 +61,8 @@ class Computer:
         smooth_cursor: bool = True,
         move_duration: int = 120,
         failsafe: bool = True,
-        on_user_takeover: str = "raise"
+        on_user_takeover: str = "raise",
+        security_policy: Optional[SecurityPolicy] = None,
     ):
         if binary_path and os.path.exists(binary_path):
             self.binary_path = os.path.abspath(binary_path)
@@ -78,6 +85,14 @@ class Computer:
         self.failsafe = failsafe
         self.on_user_takeover = on_user_takeover
         self._cached_screen_info: Optional[Dict[str, Any]] = None
+
+        # Core Enterprise & Security Extensions
+        self.guard = ActionGuard(policy=security_policy or SecurityPolicy())
+        self.session_manager = SessionManager()
+        self.accessibility = AccessibilityInspector()
+        self.verifier = ActionVerifier(self)
+        self.browser = BrowserController()
+        self._active_som_registry: Optional[Any] = None
 
     def execute_json(self, payload: Union[Dict[str, Any], List[Dict[str, Any]]], timeout: int = 30) -> Dict[str, Any]:
         """Execute one or more Computer Use actions via JSON mode."""
@@ -584,14 +599,16 @@ class Computer:
     def som_observe(
         self,
         active_window_only: bool = False,
-        save_path: Optional[str] = None
+        save_path: Optional[str] = None,
+        include_accessibility: bool = True,
+        ttl_seconds: float = 30.0,
     ) -> Dict[str, Any]:
         """
-        Capture screen and generate a Set-of-Marks (SoM) annotated image.
-        Overlays numbered tags on detected UI elements so VLMs can easily reference
-        elements by numeric ID rather than spatial coordinates.
+        Capture screen and generate a multi-modal Set-of-Marks (SoM) observation.
+        Fuses Apple Vision OCR and native macOS Accessibility nodes into a unified grounded registry,
+        tracked by session freshness TTL to prevent stale-mark hallucinations.
         """
-        from computer_use.som import create_som_overlay, image_to_base64
+        from computer_use.som import fuse_and_render_som, image_to_base64
         from PIL import Image
         import io
 
@@ -604,43 +621,57 @@ class Computer:
         pil_img = Image.open(io.BytesIO(raw_bytes))
 
         ocr_res = self.extract_text(active_window_only=active_window_only, fast=True)
+        ax_elements = self.accessibility.inspect_frontmost() if include_accessibility else []
         scale_ratio = shot.get("scale_ratio", 2.0)
 
-        annotated_img, marks = create_som_overlay(
+        annotated_img, registry = fuse_and_render_som(
             image=pil_img,
             ocr_results=ocr_res,
-            scale_factor=scale_ratio
+            ax_elements=ax_elements,
+            scale_factor=scale_ratio,
+            ttl_seconds=ttl_seconds,
         )
 
+        self._active_som_registry = registry
         b64 = image_to_base64(annotated_img)
         if save_path:
             annotated_img.save(save_path)
 
         return {
+            "registry_id": registry.registry_id,
+            "created_at": registry.created_at,
+            "ttl_seconds": registry.ttl_seconds,
             "image_path": save_path,
             "base64": b64,
             "width": annotated_img.width,
             "height": annotated_img.height,
             "scale_ratio": scale_ratio,
-            "marks": marks,
-            "count": len(marks)
+            "marks": registry.marks,
+            "count": len(registry.marks),
         }
 
     def click_mark(
         self,
         mark_id: int,
-        marks_registry: Dict[Union[int, str], Dict[str, Any]]
+        marks_registry: Optional[Dict[Union[int, str], Dict[str, Any]]] = None,
+        enforce_freshness: bool = True,
     ) -> bool:
         """
-        Click the center of a mark by its numeric ID from a Set-of-Marks observation.
+        Click the center of a mark by its numeric ID.
+        Validates against the active grounded registry to reject stale marks.
         """
-        target = marks_registry.get(mark_id) or marks_registry.get(str(mark_id))
+        target = None
+        if self._active_som_registry:
+            target = self._active_som_registry.get_mark(mark_id, enforce_freshness=enforce_freshness)
+        elif marks_registry:
+            target = marks_registry.get(mark_id) or marks_registry.get(str(mark_id))
+
         if not target:
             return False
         cx = target.get("center_x")
         cy = target.get("center_y")
         if cx is not None and cy is not None:
-            self.click(int(cx), int(cy))
+            self.human_click(int(cx), int(cy))
             return True
         return False
 

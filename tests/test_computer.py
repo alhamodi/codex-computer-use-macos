@@ -142,7 +142,8 @@ class TestComputerUse(unittest.TestCase):
             "davinci_status", "davinci_switch_page", "davinci_project_manager",
             "davinci_open_project", "davinci_timeline_action",
             "som_observe", "click_mark",
-            "human_click", "hover", "wait_until_condition", "handle_file_dialog", "verify_action_result"
+            "human_click", "hover", "wait_until_condition", "handle_file_dialog", "verify_action_result",
+            "accessibility_inspect", "create_session", "get_session_status", "cancel_session", "verify_file_output"
         ]
         
         for expected in expected_tools:
@@ -245,6 +246,70 @@ class TestComputerUse(unittest.TestCase):
             )
             self.assertEqual(res.get("status"), "blocked")
             self.assertIn("failed", res.get("blockers", []))
+
+    # --- New Phase 1-5 Architectural & Security Tests ---
+
+    def test_security_policy_enforcement(self):
+        from computer_use.security import SecurityPolicy, ActionGuard, SecurityViolation, RiskLevel
+        # Policy blocking shell execution
+        strict_policy = SecurityPolicy(
+            max_allowed_risk=RiskLevel.WRITE,
+            allow_shell_execution=False,
+            blocked_applications=["Console", "System Settings"]
+        )
+        guard = ActionGuard(strict_policy)
+        
+        # Safe read should pass
+        guard.authorize("get_screen_size", {})
+        
+        # Shell execution should be blocked
+        with self.assertRaises(SecurityViolation):
+            guard.authorize("run_program", {"command": "echo test"})
+            
+        # Target blocked app should be blocked
+        with self.assertRaises(SecurityViolation):
+            guard.authorize("focus_window", {"app_name": "System Settings"})
+
+    def test_session_lifecycle_and_cancellation(self):
+        from computer_use.session import SessionManager, SessionState
+        sm = SessionManager()
+        sess = sm.create_session(target_app="Safari", goal="Test export workflow", max_steps=5)
+        self.assertEqual(sess.state, SessionState.RUNNING)
+        self.assertTrue(sess.is_active)
+        
+        # Record steps
+        sess.record_step("click", {"x": 100, "y": 100}, {"status": "ok"})
+        self.assertEqual(sess.steps_executed, 1)
+        
+        # Cancel session
+        sm.cancel_active_session(reason="User stopped task")
+        self.assertEqual(sess.state, SessionState.CANCELLED)
+        self.assertTrue(sess.is_cancelled)
+
+    def test_grounded_som_stale_rejection(self):
+        from computer_use.som import GroundedMarkRegistry, StaleObservationError
+        reg = GroundedMarkRegistry(ttl_seconds=0.05) # 50ms TTL
+        reg.register(1, {"id": 1, "center_x": 200, "center_y": 300, "title": "Submit"})
+        
+        # Immediate read succeeds
+        m = reg.get_mark(1, enforce_freshness=False)
+        self.assertEqual(m["center_x"], 200)
+        
+        # Wait for expiration
+        import time
+        time.sleep(0.06)
+        self.assertTrue(reg.is_expired)
+        with self.assertRaises(StaleObservationError):
+            reg.get_mark(1, enforce_freshness=True)
+
+    def test_action_verifier_file(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=True) as tmp:
+            tmp.write(b"Hello DaVinci Export Render")
+            tmp.flush()
+            res = self.computer.verifier.verify_file_generated(tmp.name, min_bytes=5, timeout=1.0)
+            self.assertEqual(res.state.value, "success")
+            self.assertGreaterEqual(res.details.get("size_bytes", 0), 5)
 
 
 if __name__ == "__main__":

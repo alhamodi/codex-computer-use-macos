@@ -570,10 +570,75 @@ class MCPServer:
                     },
                     "required": ["success_keywords"]
                 }
+            },
+            # Enterprise & Safety Category
+            {
+                "name": "accessibility_inspect",
+                "description": "Inspect macOS native Accessibility UI hierarchy (buttons, fields, checkboxes) with roles, bounds, and states.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "max_depth": {"type": "integer", "description": "Maximum tree traversal depth", "default": 4}
+                    }
+                }
+            },
+            {
+                "name": "create_session",
+                "description": "Create an isolated execution session with step limits and timeout tracking.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_app": {"type": "string", "description": "Target macOS application name"},
+                        "goal": {"type": "string", "description": "Goal or description of the task"},
+                        "max_steps": {"type": "integer", "description": "Maximum allowed steps", "default": 100},
+                        "timeout_seconds": {"type": "number", "description": "Session timeout in seconds", "default": 300.0}
+                    }
+                }
+            },
+            {
+                "name": "get_session_status",
+                "description": "Get status, elapsed time, and history length of the active or specified session.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "Optional session UUID"}
+                    }
+                }
+            },
+            {
+                "name": "cancel_session",
+                "description": "Immediately cancel the active session and halt all execution.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {"type": "string", "description": "Reason for cancellation", "default": "User cancellation requested"}
+                    }
+                }
+            },
+            {
+                "name": "verify_file_output",
+                "description": "Verify an export or downloaded file exists and meets minimum byte size requirements.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "File path to verify"},
+                        "min_bytes": {"type": "integer", "description": "Minimum expected file size in bytes", "default": 1},
+                        "timeout": {"type": "number", "description": "Timeout in seconds", "default": 15.0}
+                    },
+                    "required": ["file_path"]
+                }
             }
         ]
 
     def call_tool(self, name: str, args: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # 1. Authorize action against Security Policy
+        self.computer.guard.authorize(name, args)
+
+        # 2. Record step in active session if present
+        active_sess = self.computer.session_manager.get_session()
+        if active_sess and active_sess.is_cancelled:
+            raise RuntimeError(f"Session {active_sess.session_id} is cancelled: {active_sess.stop_reason}")
+
         # Universal tool
         if name == "computer":
             action = args.get("action")
@@ -873,6 +938,40 @@ class MCPServer:
                 timeout=args.get("timeout", 15.0)
             )
             return [{"type": "text", "text": json.dumps(res, indent=2)}]
+
+        # Enterprise, Session & Verification Handlers
+        elif name == "accessibility_inspect":
+            elements = self.computer.accessibility.inspect_frontmost(max_depth=args.get("max_depth", 4))
+            return [{"type": "text", "text": json.dumps({"count": len(elements), "elements": elements}, indent=2)}]
+
+        elif name == "create_session":
+            sess = self.computer.session_manager.create_session(
+                target_app=args.get("target_app"),
+                goal=args.get("goal"),
+                max_steps=args.get("max_steps", 100),
+                timeout_seconds=args.get("timeout_seconds", 300.0)
+            )
+            return [{"type": "text", "text": json.dumps(sess.to_dict(), indent=2)}]
+
+        elif name == "get_session_status":
+            sess = self.computer.session_manager.get_session(args.get("session_id"))
+            if not sess:
+                return [{"type": "text", "text": json.dumps({"error": "No active session found"}, indent=2)}]
+            return [{"type": "text", "text": json.dumps(sess.to_dict(), indent=2)}]
+
+        elif name == "cancel_session":
+            sess = self.computer.session_manager.cancel_active_session(reason=args.get("reason", "Cancelled by user"))
+            if not sess:
+                return [{"type": "text", "text": json.dumps({"status": "no_active_session"}, indent=2)}]
+            return [{"type": "text", "text": json.dumps(sess.to_dict(), indent=2)}]
+
+        elif name == "verify_file_output":
+            vres = self.computer.verifier.verify_file_generated(
+                file_path=args["file_path"],
+                min_bytes=args.get("min_bytes", 1),
+                timeout=args.get("timeout", 15.0)
+            )
+            return [{"type": "text", "text": json.dumps(vres.to_dict(), indent=2)}]
 
         else:
             raise ValueError(f"Unknown tool: {name}")
