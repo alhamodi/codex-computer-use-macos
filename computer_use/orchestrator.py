@@ -3,25 +3,29 @@ Task Orchestrator & State Machine for Autonomous Computer Use.
 
 Provides:
 - Explicit execution state machine (CREATED, PLANNING, RUNNING, WAITING, VERIFYING, AWAITING_APPROVAL, RECOVERING, COMPLETED, FAILED, CANCELLED).
-- Multi-step goal decomposition and execution.
-- Deadlock, cycle, and stagnation detection (repeated clicks, zero screen deltas).
-- Token, latency, and cost tracking across turns.
-- Multimodal verification of sub-goals and final goals.
+- Closed-loop feedback: tool results, observations, and verifications are fed back to LLM.
+- Budget, resource, and timeout enforcement.
+- Sanitized audit logging (secrets redacted).
+- Stagnation & deadlock recovery engine.
 """
 
 from __future__ import annotations
-import hashlib
+import json
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from computer_use.audit import AuditLogger
+from computer_use.budget import BudgetExceededError, BudgetTracker, TaskBudget
 from computer_use.computer import Computer
 from computer_use.models.base import ModelDecision, ModelProvider, ModelUsage, ToolCallRequest
+from computer_use.observation import Observation, ObservationManager
 from computer_use.schema import OPENAI_COMPUTER_TOOL
 from computer_use.security import RiskLevel, SecurityPolicyGuard
 from computer_use.semantic import SemanticResolver
-from computer_use.verification import ActionVerifier
+from computer_use.verification import ActionVerifier, VerificationState
 
 
 class TaskState(str, Enum):
@@ -45,7 +49,8 @@ class TaskStep:
     action_type: str
     parameters: Dict[str, Any] = field(default_factory=dict)
     state: TaskState = TaskState.CREATED
-    verification_rule: Optional[Dict[str, Any]] = None
+    verification_state: str = "pending"
+    verification_evidence: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     execution_time_ms: float = 0.0
@@ -61,20 +66,23 @@ class TaskMetrics:
     total_latency_seconds: float = 0.0
     model_usage: ModelUsage = field(default_factory=ModelUsage)
     stagnation_events: int = 0
+    verification_passed_count: int = 0
+    verification_uncertain_count: int = 0
 
 
 class TaskOrchestrator:
     """
     Central Coordinator managing the state machine, model reasoning loop,
-    security policy checks, stagnation avoidance, and multi-step verification.
+    security policy checks, stagnation avoidance, budget enforcement,
+    and closed-loop multi-step verification.
     """
 
     def __init__(
         self,
         model_provider: ModelProvider,
         computer: Optional[Computer] = None,
+        budget: Optional[TaskBudget] = None,
         max_steps: int = 25,
-        max_retries_per_step: int = 2,
         approval_callback: Optional[Callable[[str, Dict[str, Any]], bool]] = None,
     ):
         self.provider = model_provider
@@ -82,10 +90,15 @@ class TaskOrchestrator:
         self.security_guard = SecurityPolicyGuard.get_instance()
         self.verifier = ActionVerifier(self.computer)
         self.semantic_resolver = SemanticResolver(self.computer)
+        self.obs_manager = ObservationManager(self.computer)
 
-        self.max_steps = max_steps
-        self.max_retries = max_retries_per_step
+        self.budget = budget or TaskBudget(max_steps=max_steps)
+        self.budget_tracker = BudgetTracker(budget=self.budget)
         self.approval_callback = approval_callback
+
+        self.task_id = str(uuid.uuid4())
+        self.session_id = str(uuid.uuid4())
+        self.audit_logger = AuditLogger(task_id=self.task_id, session_id=self.session_id)
 
         self.current_state = TaskState.CREATED
         self.goal: str = ""
@@ -107,6 +120,11 @@ class TaskOrchestrator:
             "from": prev_state.value,
             "to": new_state.value,
         })
+        self.audit_logger.record(
+            step_id=len(self.steps),
+            event="state_transition",
+            parameters={"from": prev_state.value, "to": new_state.value},
+        )
 
     def check_stagnation(self, action_signature: str, screen_hash: Optional[str] = None) -> bool:
         """
@@ -135,19 +153,20 @@ class TaskOrchestrator:
 
     def execute_goal(self, goal: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Executes a high-level goal through the state machine.
+        Executes a high-level goal through closed-loop state machine.
         """
         self.goal = goal
         self.set_state(TaskState.PLANNING)
         start_time = time.time()
 
         system_prompt = (
-            "You are an expert autonomous Computer Use Agent on macOS.\n"
-            "Your task is to accomplish the user's goal safely and efficiently.\n"
-            "Rules:\n"
-            "1. Inspect the screen state every turn before proposing actions.\n"
-            "2. If an element cannot be clicked, look for modal dialogues or try a semantic target.\n"
-            "3. Once the goal is verified, summarize your achievements and conclude."
+            "You are an expert autonomous Computer Use Agent running on macOS.\n"
+            "Your objective is to accomplish the user's goal safely, cleanly, and reliably.\n"
+            "Operational doctrine:\n"
+            "1. Inspect the visual observation and active application state each turn.\n"
+            "2. When interacting with UI controls, prefer semantic names or verified marks over raw coordinates.\n"
+            "3. After an action is executed, analyze the feedback message before issuing next commands.\n"
+            "4. When the goal is completed, output a concise concluding summary without calling any more tools."
         )
 
         messages: List[Dict[str, Any]] = [
@@ -156,15 +175,32 @@ class TaskOrchestrator:
 
         step_counter = 0
 
-        while step_counter < self.max_steps:
+        while True:
             step_counter += 1
+
+            # Budget Check
+            try:
+                self.budget_tracker.check_limits()
+            except BudgetExceededError as err:
+                self.set_state(TaskState.FAILED)
+                self.metrics.total_latency_seconds = time.time() - start_time
+                self.metrics.total_steps = step_counter
+                return {
+                    "success": False,
+                    "state": self.current_state.value,
+                    "error": str(err),
+                    "metrics": self.metrics,
+                    "log": self.execution_log,
+                }
+
             self.set_state(TaskState.RUNNING)
 
-            # Vision input: Capture lightweight screen state
-            screen_shot = self.computer.screenshot(target_width=1280)
-            screen_b64 = screen_shot["base64"]
-            screen_hash = hashlib.md5(screen_b64[:1000].encode()).hexdigest()
+            # 1. Capture Unified Observation
+            obs = self.obs_manager.capture_observation(target_width=1280, with_ocr=True, with_ax=True)
+            screen_b64 = obs.screenshot_base64
+            screen_hash = obs.screen_hash
 
+            # Vision input message
             messages.append({
                 "role": "user",
                 "content": [
@@ -174,36 +210,55 @@ class TaskOrchestrator:
                     },
                     {
                         "type": "text",
-                        "text": f"Screen state (step {step_counter}/{self.max_steps}). Next action?",
+                        "text": f"Observation [App: {obs.active_app} | Window: {obs.active_window.get('window_title', '')}]. Step {step_counter}.",
                     },
                 ],
             })
 
-            # Call Model Provider
+            # 2. Invoke Model Provider
             t_model_start = time.time()
-            decision = self.provider.generate_decision(
-                messages=messages,
-                tools=[OPENAI_COMPUTER_TOOL],
-                system_prompt=system_prompt,
-            )
-            self.metrics.model_usage.add(decision.usage)
+            try:
+                decision = self.provider.generate_decision(
+                    messages=messages,
+                    tools=[OPENAI_COMPUTER_TOOL],
+                    system_prompt=system_prompt,
+                )
+            except Exception as model_err:
+                self.set_state(TaskState.FAILED)
+                return {
+                    "success": False,
+                    "state": self.current_state.value,
+                    "error": f"Model Provider failed: {model_err}",
+                    "metrics": self.metrics,
+                }
 
-            # If no tool calls, model considers task finished or requires clarification
+            self.metrics.model_usage.add(decision.usage)
+            self.budget_tracker.record_model_call(decision.usage.estimated_cost_usd)
+
+            # 3. Model Finishes without tool calls
             if not decision.has_tool_calls:
                 self.set_state(TaskState.VERIFYING)
                 final_summary = decision.text_content or "Goal finished."
+
+                # Verify Final Window/State if context dictates
+                v_state = "success"
+                if context and "expected_window" in context:
+                    v_res = self.verifier.verify_window_title(context["expected_window"], timeout=2.0)
+                    v_state = v_res.state.value
+
                 self.set_state(TaskState.COMPLETED)
                 self.metrics.total_latency_seconds = time.time() - start_time
                 self.metrics.total_steps = step_counter
                 return {
-                    "success": True,
+                    "success": (v_state == "success"),
                     "state": self.current_state.value,
+                    "verification": v_state,
                     "summary": final_summary,
                     "metrics": self.metrics,
                     "log": self.execution_log,
                 }
 
-            # Process Tool Calls
+            # 4. Dispatch Tool Calls
             for tool_call in decision.tool_calls:
                 args = tool_call.arguments
                 action = args.get("action")
@@ -211,14 +266,23 @@ class TaskOrchestrator:
                 text = args.get("text", "")
                 sig = f"{action}:{coord}:{text}"
 
-                # Stagnation Check
+                # Stagnation & Deadlock Evaluation
                 if self.check_stagnation(sig, screen_hash):
                     self.set_state(TaskState.RECOVERING)
                     self.metrics.recovery_attempts += 1
-                    # Inject recovery guidance
+                    try:
+                        self.budget_tracker.record_recovery()
+                    except BudgetExceededError as b_err:
+                        self.set_state(TaskState.FAILED)
+                        return {"success": False, "state": self.current_state.value, "error": str(b_err), "metrics": self.metrics}
+
                     messages.append({
-                        "role": "system",
-                        "content": "STAGNATION DETECTED: The last action did not produce a visible change. Try pressing Escape, dismissing active modals, or using keyboard navigation.",
+                        "role": "tool",
+                        "tool_call_id": tool_call.call_id,
+                        "content": json.dumps({
+                            "status": "stagnation_detected",
+                            "message": "Action produced no visible desktop change. Dismiss active overlays or select an alternative target.",
+                        }),
                     })
                     break
 
@@ -234,7 +298,7 @@ class TaskOrchestrator:
                         return {
                             "success": False,
                             "state": self.current_state.value,
-                            "error": f"Action '{action}' was denied by security approval.",
+                            "error": f"Action '{action}' was denied by human security approval.",
                             "metrics": self.metrics,
                         }
                     self.set_state(TaskState.RUNNING)
@@ -249,28 +313,44 @@ class TaskOrchestrator:
                     state=TaskState.RUNNING,
                 )
 
+                exec_result = {}
                 try:
                     exec_result = self._dispatch_action(action, args)
                     step_obj.result = exec_result
                     step_obj.state = TaskState.COMPLETED
+                    step_obj.verification_state = "executed"
                     self.metrics.successful_steps += 1
                 except Exception as exc:
                     step_obj.error = str(exc)
                     step_obj.state = TaskState.FAILED
+                    step_obj.verification_state = "error"
                     self.metrics.failed_steps += 1
+                    exec_result = {"error": str(exc)}
 
-                step_obj.execution_time_ms = (time.time() - t_exec_start) * 1000.0
+                exec_duration = (time.time() - t_exec_start) * 1000.0
+                step_obj.execution_time_ms = exec_duration
                 self.steps.append(step_obj)
+                self.budget_tracker.record_step()
 
-        self.set_state(TaskState.FAILED)
-        self.metrics.total_latency_seconds = time.time() - start_time
-        self.metrics.total_steps = step_counter
-        return {
-            "success": False,
-            "state": self.current_state.value,
-            "error": f"Exceeded maximum steps limit ({self.max_steps}).",
-            "metrics": self.metrics,
-        }
+                # Audit Log
+                self.audit_logger.record(
+                    step_id=step_counter,
+                    event="action_execution",
+                    tool_name="computer",
+                    action_type=action,
+                    target_app=obs.active_app,
+                    parameters=args,
+                    result=exec_result,
+                    verification_state=step_obj.verification_state,
+                    duration_ms=exec_duration,
+                )
+
+                # Feed Execution Result Back to the Model Context (Closed-Loop)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.call_id,
+                    "content": json.dumps(exec_result),
+                })
 
     def _dispatch_action(self, action: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Dispatches an action safely to the Computer abstraction."""
