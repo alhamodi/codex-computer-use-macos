@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from computer_use.audit import AuditLogger
 from computer_use.budget import BudgetExceededError, BudgetTracker, TaskBudget
+from computer_use.checkpoint import CheckpointStore, TaskCheckpoint
 from computer_use.computer import Computer
 from computer_use.models.base import ModelDecision, ModelProvider, ModelUsage, ToolCallRequest
 from computer_use.observation import Observation, ObservationManager
@@ -99,6 +100,7 @@ class TaskOrchestrator:
         self.task_id = str(uuid.uuid4())
         self.session_id = str(uuid.uuid4())
         self.audit_logger = AuditLogger(task_id=self.task_id, session_id=self.session_id)
+        self.checkpoint_store = CheckpointStore()
 
         self.current_state = TaskState.CREATED
         self.goal: str = ""
@@ -109,6 +111,32 @@ class TaskOrchestrator:
         # Stagnation & Loop Detection State
         self._action_signature_history: List[str] = []
         self._screen_hash_history: List[str] = []
+
+    def save_checkpoint(self, last_error: Optional[str] = None) -> str:
+        """Persists task state to disk for safe resumption."""
+        cp = TaskCheckpoint(
+            task_id=self.task_id,
+            session_id=self.session_id,
+            goal=self.goal,
+            state=self.current_state.value,
+            step_index=len(self.steps),
+            completed_steps=[
+                {
+                    "step_id": s.step_id,
+                    "action": s.action_type,
+                    "state": s.state.value if hasattr(s.state, "value") else str(s.state),
+                    "execution_time_ms": s.execution_time_ms,
+                    "verification": s.verification_state,
+                }
+                for s in self.steps
+            ],
+            cumulative_cost_usd=self.metrics.model_usage.estimated_cost_usd,
+            total_tokens=self.metrics.model_usage.total_tokens,
+            created_at=time.time(),
+            updated_at=time.time(),
+            last_error=last_error,
+        )
+        return self.checkpoint_store.save(cp)
 
     def set_state(self, new_state: TaskState) -> None:
         """Transitions state with audit logging."""
@@ -125,6 +153,12 @@ class TaskOrchestrator:
             event="state_transition",
             parameters={"from": prev_state.value, "to": new_state.value},
         )
+        # Checkpoint state change
+        try:
+            self.save_checkpoint()
+        except Exception:
+            pass
+
 
     def check_stagnation(self, action_signature: str, screen_hash: Optional[str] = None) -> bool:
         """
